@@ -1,0 +1,530 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<title>hand → 3D</title>
+<style>
+@import url('https://fonts.googleapis.com/css2?family=DM+Mono:wght@300;400;500&display=swap');
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+:root{--bg:#06060a;--border:rgba(255,255,255,0.07);--muted:rgba(255,255,255,0.32);--bright:rgba(255,255,255,0.90)}
+body{background:var(--bg);font-family:'DM Mono',monospace;height:100vh;overflow:hidden}
+
+#three-canvas{position:fixed;inset:0;width:100%;height:100%;z-index:0}
+
+#cam-video{position:fixed;visibility:hidden;pointer-events:none}
+
+/* Preview */
+#cam-wrap{
+  position:fixed;bottom:88px;right:20px;z-index:20;
+  width:200px;border-radius:10px;overflow:hidden;
+  border:1px solid var(--border);box-shadow:0 4px 28px rgba(0,0,0,.6);
+}
+#preview-canvas{width:200px;height:150px;display:block}
+
+/* Header */
+header{position:fixed;top:0;left:0;right:0;z-index:10;display:flex;align-items:center;justify-content:space-between;padding:15px 22px;pointer-events:none}
+.logo{font-size:.68rem;color:var(--bright);letter-spacing:.06em}
+.logo em{color:var(--muted);font-style:normal}
+.badges{display:flex;gap:12px}
+.badge{display:flex;align-items:center;gap:5px;font-size:.55rem;color:var(--muted);letter-spacing:.06em}
+.badge .dot{width:5px;height:5px;border-radius:50%;background:#1a1a1a;transition:background .3s,box-shadow .3s}
+.badge.on .dot{background:#fff;box-shadow:0 0 5px rgba(255,255,255,.85)}
+.badge.on{color:rgba(255,255,255,.6)}
+
+/* Gesto actual */
+#gest-label{position:fixed;top:50px;left:50%;transform:translateX(-50%);z-index:15;font-size:.58rem;color:var(--muted);letter-spacing:.1em;pointer-events:none;transition:color .2s}
+#gest-label.active{color:rgba(255,255,255,.6)}
+
+/* Gesture HUD */
+#gesture-hud{position:fixed;bottom:88px;left:22px;z-index:15;display:flex;flex-direction:column;gap:5px;pointer-events:none}
+.g-row{display:flex;align-items:center;gap:7px;opacity:.22;transition:opacity .15s,transform .15s}
+.g-row.active{opacity:1;transform:translateX(2px)}
+.g-icon{width:28px;height:28px;border-radius:50%;border:1px solid rgba(255,255,255,.1);display:flex;align-items:center;justify-content:center;font-size:.82rem;background:rgba(255,255,255,.02);transition:border-color .2s,background .2s}
+.g-row.active .g-icon{border-color:rgba(255,255,255,.55);background:rgba(255,255,255,.07)}
+.g-label{font-size:.52rem;color:var(--muted);letter-spacing:.05em}
+.g-row.active .g-label{color:var(--bright)}
+
+/* Progress ring */
+#change-prog{position:fixed;bottom:74px;left:22px;z-index:16;opacity:0;transition:opacity .2s;pointer-events:none}
+#change-prog.show{opacity:1}
+
+/* Shape flash */
+#shape-flash{position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);z-index:20;text-align:center;opacity:0;transition:opacity .4s;pointer-events:none}
+#shape-flash.show{opacity:1}
+#shape-flash .name{font-size:1.8rem;font-weight:300;color:#fff;letter-spacing:-.02em}
+#shape-flash .sub{font-size:.52rem;color:var(--muted);margin-top:9px;letter-spacing:.14em;text-transform:uppercase}
+
+/* Bottom */
+.bottom{position:fixed;bottom:0;left:0;right:0;z-index:10;display:flex;align-items:flex-end;justify-content:space-between;padding:16px 22px}
+.shapes-row{display:flex;gap:4px;flex-wrap:wrap}
+.shape-pill{background:rgba(255,255,255,.04);border:1px solid var(--border);color:var(--muted);font-family:'DM Mono',monospace;font-size:.56rem;padding:5px 11px;border-radius:40px;cursor:pointer;transition:all .18s;letter-spacing:.03em}
+.shape-pill:hover{border-color:rgba(255,255,255,.22);color:rgba(255,255,255,.7)}
+.shape-pill.active{background:rgba(255,255,255,.09);border-color:rgba(255,255,255,.42);color:#fff}
+.colors-col{display:flex;flex-direction:column;gap:6px;align-items:center}
+.color-dot{width:17px;height:17px;border-radius:50%;cursor:pointer;border:2px solid transparent;transition:transform .2s,border-color .2s}
+.color-dot:hover{transform:scale(1.25)}
+.color-dot.active{border-color:rgba(255,255,255,.8);transform:scale(1.1)}
+
+/* Loading */
+#loading{position:fixed;inset:0;z-index:50;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px;background:var(--bg);transition:opacity .8s}
+#loading.hide{opacity:0;pointer-events:none}
+.spin{width:32px;height:32px;border:2px solid rgba(255,255,255,.1);border-top-color:rgba(255,255,255,.7);border-radius:50%;animation:spin .85s linear infinite}
+@keyframes spin{to{transform:rotate(360deg)}}
+#loading p{font-size:.62rem;color:var(--muted);letter-spacing:.06em}
+
+/* Grab cursor */
+#grab-dot{position:fixed;z-index:25;pointer-events:none;width:16px;height:16px;border-radius:50%;border:1.5px solid rgba(255,255,255,.9);transform:translate(-50%,-50%);display:none;box-shadow:0 0 10px rgba(255,255,255,.35)}
+#grab-dot.active{background:rgba(255,255,255,.18);width:20px;height:20px}
+</style>
+</head>
+<body>
+
+<div id="loading"><div class="spin"></div><p>cargando mediapipe...</p></div>
+<div id="grab-dot"></div>
+<canvas id="three-canvas"></canvas>
+
+<!-- Video oculto igual que kainat.html -->
+<video id="cam-video" playsinline></video>
+
+<div id="cam-wrap">
+  <canvas id="preview-canvas"></canvas>
+</div>
+
+<header>
+  <div class="logo">hand<em> → </em>3d</div>
+  <div class="badges">
+    <div class="badge" id="cam-badge"><div class="dot"></div>cam</div>
+    <div class="badge" id="hand-badge"><div class="dot"></div>hands</div>
+  </div>
+</header>
+
+<div id="gest-label">—</div>
+
+<div id="gesture-hud">
+  <div class="g-row" id="hud-grab"><div class="g-icon">🤏</div><div class="g-label">pinch → agarrar</div></div>
+  <div class="g-row" id="hud-disperse"><div class="g-icon">🖐</div><div class="g-label">mano abierta → dispersar</div></div>
+  <div class="g-row" id="hud-change"><div class="g-icon">👆✊</div><div class="g-label">L + puño → siguiente</div></div>
+</div>
+
+<svg id="change-prog" width="46" height="46" viewBox="0 0 46 46">
+  <circle cx="23" cy="23" r="19" fill="none" stroke="rgba(255,255,255,.07)" stroke-width="1.5"/>
+  <circle id="prog-ring" cx="23" cy="23" r="19" fill="none" stroke="rgba(255,255,255,.85)" stroke-width="1.5"
+    stroke-dasharray="119.4" stroke-dashoffset="119.4" stroke-linecap="round"
+    transform="rotate(-90 23 23)" style="transition:stroke-dashoffset .07s linear"/>
+</svg>
+
+<div id="shape-flash">
+  <div class="name" id="flash-name">♥ Corazón</div>
+  <div class="sub">siguiente figura</div>
+</div>
+
+<div class="bottom">
+  <div class="shapes-row">
+    <button class="shape-pill active" data-shape="heart">♥ corazón</button>
+    <button class="shape-pill" data-shape="torus">○ torus</button>
+    <button class="shape-pill" data-shape="sphere">◉ esfera</button>
+    <button class="shape-pill" data-shape="dna">〰 dna</button>
+    <button class="shape-pill" data-shape="mobius">∞ möbius</button>
+    <button class="shape-pill" data-shape="star">★ estrella</button>
+  </div>
+  <div class="colors-col">
+    <div class="color-dot active" data-color="#ff2d6b" style="background:#ff2d6b"></div>
+    <div class="color-dot" data-color="#00f5c4" style="background:#00f5c4"></div>
+    <div class="color-dot" data-color="#7c6bff" style="background:#7c6bff"></div>
+    <div class="color-dot" data-color="#ff9900" style="background:#ff9900"></div>
+    <div class="color-dot" data-color="#00c8ff" style="background:#00c8ff"></div>
+    <div class="color-dot" data-color="#ffffff" style="background:#ffffff"></div>
+  </div>
+</div>
+
+<script src="./three.min.js"></script>
+<script src="./hands.js"></script>
+<script src="./camera_utils.js"></script>
+<script src="./drawing_utils.js"></script>
+<script src="./hands_solution_simd_wasm_bin.js"></script>
+<script src="./hands_solution_packed_assets_loader.js"></script>
+
+<script>
+'use strict';
+
+// ══════════════════════════════════════════════════
+// THREE.JS SETUP
+// ══════════════════════════════════════════════════
+const threeCanvas = document.getElementById('three-canvas');
+const renderer = new THREE.WebGLRenderer({canvas:threeCanvas, antialias:true});
+renderer.setPixelRatio(Math.min(window.devicePixelRatio,2));
+renderer.setClearColor(0x06060a,1);
+const scene   = new THREE.Scene();
+const cam3d   = new THREE.PerspectiveCamera(60,1,0.1,100);
+cam3d.position.z = 5;
+function resize(){renderer.setSize(window.innerWidth,window.innerHeight);cam3d.aspect=window.innerWidth/window.innerHeight;cam3d.updateProjectionMatrix()}
+window.addEventListener('resize',resize); resize();
+
+// ══════════════════════════════════════════════════
+// PARTICLES 
+// ══════════════════════════════════════════════════
+const SHAPES=['heart','torus','sphere','dna','mobius','star'];
+const SHAPE_NAMES={heart:'♥ Corazón',torus:'○ Torus',sphere:'◉ Esfera',dna:'〰 DNA',mobius:'∞ Möbius',star:'★ Estrella'};
+const N=5000;
+const CONFIG={shape:'heart',color:new THREE.Color('#ff2d6b')};
+const posArr=new Float32Array(N*3),colArr=new Float32Array(N*3);
+const homeArr=new Float32Array(N*3),randArr=new Float32Array(N*3);
+let geo,mat,pts;
+
+function genHeart(){for(let i=0;i<N;i++){const t=(Math.random()*2-1)*Math.PI,x=16*Math.pow(Math.sin(t),3),y=13*Math.cos(t)-5*Math.cos(2*t)-2*Math.cos(3*t)-Math.cos(4*t),z=(Math.random()-.5)*3;homeArr[i*3]=x*.085;homeArr[i*3+1]=y*.085;homeArr[i*3+2]=z*.14*(1-Math.abs(x/16))}}
+function genTorus(){for(let i=0;i<N;i++){const u=Math.random()*Math.PI*2,v=Math.random()*Math.PI*2;homeArr[i*3]=(1.2+.42*Math.cos(v))*Math.cos(u);homeArr[i*3+1]=(1.2+.42*Math.cos(v))*Math.sin(u);homeArr[i*3+2]=.42*Math.sin(v)}}
+function genSphere(){for(let i=0;i<N;i++){const th=Math.acos(2*Math.random()-1),ph=Math.random()*Math.PI*2;homeArr[i*3]=1.4*Math.sin(th)*Math.cos(ph);homeArr[i*3+1]=1.4*Math.sin(th)*Math.sin(ph);homeArr[i*3+2]=1.4*Math.cos(th)}}
+function genDNA(){for(let i=0;i<N;i++){const t=(i/N)*Math.PI*10-Math.PI*5,s=Math.random()>.5?0:Math.PI;homeArr[i*3]=Math.cos(t+s)*.7+(Math.random()-.5)*.1;homeArr[i*3+1]=t*.13;homeArr[i*3+2]=Math.sin(t+s)*.7+(Math.random()-.5)*.1}}
+function genMobius(){for(let i=0;i<N;i++){const u=Math.random()*Math.PI*2,v=(Math.random()-.5)*.5,r=1+v*Math.cos(u/2);homeArr[i*3]=r*Math.cos(u);homeArr[i*3+1]=r*Math.sin(u);homeArr[i*3+2]=v*Math.sin(u/2)}}
+function genStar(){for(let i=0;i<N;i++){const t=Math.random()*Math.PI*2,sp=Math.floor(t/(Math.PI*2/5)),lt=t-sp*(Math.PI*2/5),r=lt<Math.PI/5?1.3+(0.55-1.3)*(lt/(Math.PI/5)):0.55+(1.3-0.55)*((lt-Math.PI/5)/(Math.PI/5));homeArr[i*3]=r*Math.cos(t);homeArr[i*3+1]=r*Math.sin(t);homeArr[i*3+2]=(Math.floor(Math.random()*3)-1)*.3}}
+const GENS={heart:genHeart,torus:genTorus,sphere:genSphere,dna:genDNA,mobius:genMobius,star:genStar};
+
+function buildRand(){for(let i=0;i<N;i++){const th=Math.random()*Math.PI*2,ph=Math.random()*Math.PI,r=2.5+Math.pow(Math.random(),.3)*6;randArr[i*3]=r*Math.sin(ph)*Math.cos(th);randArr[i*3+1]=r*Math.sin(ph)*Math.sin(th);randArr[i*3+2]=r*Math.cos(ph)}}
+
+function initParticles(){
+  GENS[CONFIG.shape](); buildRand();
+  for(let i=0;i<N*3;i++) posArr[i]=randArr[i]; // empieza disperso
+  geo=new THREE.BufferGeometry();
+  geo.setAttribute('position',new THREE.BufferAttribute(posArr,3));
+  geo.setAttribute('color',new THREE.BufferAttribute(colArr,3));
+  mat=new THREE.PointsMaterial({size:.021,vertexColors:true,transparent:true,opacity:.9,sizeAttenuation:true});
+  pts=new THREE.Points(geo,mat);
+  scene.add(pts);
+}
+
+let morphing=false,morphT=0,shapeIdx=0;
+const mFrom=new Float32Array(N*3),mTo=new Float32Array(N*3);
+const MORPH_DUR=1.0;
+function easeOutElastic(t){if(t===0||t===1)return t;return Math.pow(2,-10*t)*Math.sin((t*10-.75)*(2*Math.PI/3))+1}
+
+function morphToShape(shape){
+  if(morphing)return;
+  CONFIG.shape=shape;
+  document.getElementById('flash-name').textContent=SHAPE_NAMES[shape];
+  const fl=document.getElementById('shape-flash');
+  fl.classList.add('show'); setTimeout(()=>fl.classList.remove('show'),1400);
+  document.querySelectorAll('.shape-pill').forEach(b=>b.classList.toggle('active',b.dataset.shape===shape));
+  const pos=geo.attributes.position.array;
+  for(let i=0;i<N*3;i++) mFrom[i]=pos[i];
+  GENS[shape](); buildRand();
+  for(let i=0;i<N*3;i++) mTo[i]=homeArr[i];
+  morphT=0; morphing=true;
+}
+
+// ══════════════════════════════════════════════════
+// GESTURE CLASSIFIER 
+// ══════════════════════════════════════════════════
+const LM={WRIST:0,THUMB_TIP:4,INDEX_MCP:5,INDEX_PIP:6,INDEX_TIP:8,MIDDLE_MCP:9,MIDDLE_PIP:10,MIDDLE_TIP:12,RING_PIP:14,RING_TIP:16,PINKY_PIP:18,PINKY_TIP:20};
+
+function d2(a,b){return Math.hypot(a.x-b.x,a.y-b.y)}
+
+function fingerUp(lm,tip,pip){ return lm[tip].y < lm[pip].y-0.03 }
+function thumbOpen(lm){
+  const sz=Math.max(d2(lm[LM.WRIST],lm[LM.MIDDLE_MCP]),0.001);
+  return d2(lm[LM.THUMB_TIP],lm[LM.INDEX_MCP])/sz > 0.55;
+}
+function pinchRatio(lm){
+  const sz=Math.max(d2(lm[LM.WRIST],lm[LM.MIDDLE_MCP]),0.001);
+  return d2(lm[LM.THUMB_TIP],lm[LM.INDEX_TIP])/sz;
+}
+function classifyGesture(lm){
+  const pr=pinchRatio(lm);
+  const th=thumbOpen(lm);
+  const idx=fingerUp(lm,LM.INDEX_TIP,LM.INDEX_PIP);
+  const mid=fingerUp(lm,LM.MIDDLE_TIP,LM.MIDDLE_PIP);
+  const rng=fingerUp(lm,LM.RING_TIP,LM.RING_PIP);
+  const pnk=fingerUp(lm,LM.PINKY_TIP,LM.PINKY_PIP);
+  const ext=[th,idx,mid,rng,pnk].filter(Boolean).length;
+  if(pr<0.30)             return 'pinch';
+  if(ext>=4)              return 'open';
+  if(ext<=1)              return 'fist';
+  if(th&&idx&&!mid&&!rng&&!pnk) return 'L';
+  return 'none';
+}
+
+// ══════════════════════════════════════════════════
+// EXPONENTIAL SMOOTHING
+// ══════════════════════════════════════════════════
+const SMOOTH=0.45;
+let smoothedHands=[];
+function smoothUpdate(rawList){
+  if(!rawList||rawList.length===0){
+    smoothedHands=smoothedHands.map(h=>({...h,ttl:(h.ttl||4)-1})).filter(h=>h.ttl>0);
+    return;
+  }
+  smoothedHands=rawList.map(raw=>{
+    const prev=smoothedHands.find(s=>s.label===raw.label);
+    if(prev){
+      const lm=raw.lm.map((p,i)=>({
+        x:prev.lm[i].x*SMOOTH+p.x*(1-SMOOTH),
+        y:prev.lm[i].y*SMOOTH+p.y*(1-SMOOTH),
+        z:prev.lm[i].z*SMOOTH+p.z*(1-SMOOTH),
+      }));
+      return{label:raw.label,lm,gesture:classifyGesture(lm),ttl:6};
+    }
+    return{label:raw.label,lm:raw.lm,gesture:classifyGesture(raw.lm),ttl:6};
+  });
+}
+
+// ══════════════════════════════════════════════════
+// PREVIEW 
+// ══════════════════════════════════════════════════
+const previewCanvas=document.getElementById('preview-canvas');
+const pCtx=previewCanvas.getContext('2d');
+const GCOL={pinch:'#ff2d6b',open:'#00f5c4',fist:'#7c6bff',L:'#ff9900',none:'rgba(255,255,255,0.5)'};
+const HAND_PAIRS=[[0,1],[1,2],[2,3],[3,4],[0,5],[5,6],[6,7],[7,8],[5,9],[9,10],[10,11],[11,12],[9,13],[13,14],[14,15],[15,16],[13,17],[17,18],[18,19],[19,20],[0,17]];
+
+function drawPreview(results){
+  const W=previewCanvas.width=640, H=previewCanvas.height=480;
+
+  // Image of camera (mirrored to match user perspective)
+  pCtx.save();
+  pCtx.scale(-1,1);
+  pCtx.drawImage(results.image,-W,0,W,H);
+  pCtx.restore();
+
+  // Overlay background 
+  pCtx.fillStyle='rgba(6,6,10,0.4)';
+  pCtx.fillRect(0,0,W,H);
+
+  if(!results.multiHandLandmarks) return;
+  results.multiHandLandmarks.forEach((lm,i)=>{
+    const label=results.multiHandedness[i].label;
+    const gesture=classifyGesture(lm);
+    const col=GCOL[gesture];
+    // x mirrored to match user perspective
+    const px=p=>((1-p.x)*W);
+    const py=p=>(p.y*H);
+
+    // skeleton
+    pCtx.strokeStyle='rgba(255,255,255,0.22)';
+    pCtx.lineWidth=1;
+    HAND_PAIRS.forEach(([a,b])=>{
+      pCtx.beginPath();
+      pCtx.moveTo(px(lm[a]),py(lm[a]));
+      pCtx.lineTo(px(lm[b]),py(lm[b]));
+      pCtx.stroke();
+    });
+
+    // points, keypoints, landmarks
+    lm.forEach((p,idx)=>{
+      const big=idx===4||idx===8; // pulgar tip e índice tip
+      pCtx.beginPath();
+      pCtx.arc(px(p),py(p),big?4:2,0,Math.PI*2);
+      pCtx.fillStyle=big?col:'rgba(255,255,255,0.55)';
+      pCtx.fill();
+    });
+
+    // pinch line (thumb ↔ index)
+    const pr=pinchRatio(lm);
+    pCtx.beginPath();
+    pCtx.moveTo(px(lm[4]),py(lm[4]));
+    pCtx.lineTo(px(lm[8]),py(lm[8]));
+    pCtx.strokeStyle=pr<0.30?col:'rgba(255,255,255,0.12)';
+    pCtx.lineWidth=pr<0.30?2:1;
+    pCtx.setLineDash(pr<0.30?[]:[4,4]);
+    pCtx.stroke();
+    pCtx.setLineDash([]);
+
+    // Label
+    pCtx.font='bold 11px monospace';
+    pCtx.fillStyle=col;
+    pCtx.fillText(`${label[0]} ${gesture}`,px(lm[0])-20,py(lm[0])-8);
+  });
+}
+
+// ══════════════════════════════════════════════════
+// 3D STATE
+// ══════════════════════════════════════════════════
+let dispersion=1,dispersionTgt=0;
+let isGrabbing=false;
+const objPos=new THREE.Vector3(0,0,0);
+const grabOffset=new THREE.Vector3();
+let rotX=0,rotY=0,tRotX=0,tRotY=0;
+let changeHold=0;
+const CHANGE_DUR=0.75,RING_C=119.4;
+const progRing=document.getElementById('prog-ring');
+const grabDotEl=document.getElementById('grab-dot');
+
+function lmToWorld(lm){
+  return new THREE.Vector3((0.5-lm.x)*7.0,(0.5-lm.y)*5.0,0);
+}
+function mid(a,b){return{x:(a.x+b.x)*.5,y:(a.y+b.y)*.5}}
+
+function updateGestures(dt){
+  const hands=smoothedHands;
+  const L=hands.find(h=>h.label==='Left');
+  const R=hands.find(h=>h.label==='Right');
+  const gL=L?.gesture||'none';
+  const gR=R?.gesture||'none';
+
+  // badges
+  document.getElementById('hand-badge').classList.toggle('on',hands.length>0);
+  const gl=document.getElementById('gest-label');
+  gl.textContent=hands.length?hands.map(h=>h.gesture).join(' + '):'—';
+  gl.classList.toggle('active',hands.length>0);
+
+  // ── disperse ───────────────────────────────
+  const anyOpen=gL==='open'||gR==='open';
+  if(anyOpen){
+    if(L&&R){
+      const dist=d2(L.lm[LM.WRIST],R.lm[LM.WRIST]);
+      dispersionTgt=Math.max(0.05,1-dist*1.4);
+    } else {
+      dispersionTgt=0.9;
+    }
+  } else {
+    dispersionTgt=0;
+  }
+  document.getElementById('hud-disperse').classList.toggle('active',anyOpen);
+
+  // ── GRAB: pinch ───────────────────────────────
+  const pinchHand=(gR==='pinch'?R:null)||(gL==='pinch'?L:null);
+  if(pinchHand){
+    const mp=mid(pinchHand.lm[4],pinchHand.lm[8]);
+    const wp=lmToWorld(mp);
+    if(!isGrabbing){grabOffset.copy(objPos).sub(wp);isGrabbing=true;}
+    objPos.lerp(wp.clone().add(grabOffset),0.22);
+    // cursor
+    const sx=(1-mp.x)*window.innerWidth, sy=mp.y*window.innerHeight;
+    grabDotEl.style.cssText=`display:block;left:${sx}px;top:${sy}px`;
+    grabDotEl.classList.add('active');
+  } else {
+    isGrabbing=false;
+    grabDotEl.style.display='none';
+    grabDotEl.classList.remove('active');
+  }
+  document.getElementById('hud-grab').classList.toggle('active',!!pinchHand);
+
+  // ── ROTATION ───────────────────────────────
+  const rotHand=pinchHand?(pinchHand===R?L:R):(R||L);
+  if(rotHand&&!isGrabbing){
+    const w=rotHand.lm[LM.WRIST];
+    tRotY=(w.x-0.5)*Math.PI*2.1;
+    tRotX=-(w.y-0.5)*Math.PI*1.1;
+  }
+
+  // ── CHANGE: L + puño  ───────────────────────── 
+  const changeCond=(gL==='L'&&gR==='fist')||(gR==='L'&&gL==='fist');
+  const hasL=gL==='L'||gR==='L';
+  document.getElementById('hud-change').classList.toggle('active',hasL&&hands.length>=2);
+  const cp=document.getElementById('change-prog');
+  if(changeCond&&!morphing){
+    changeHold+=dt;
+    cp.classList.add('show');
+    progRing.style.strokeDashoffset=RING_C*(1-Math.min(changeHold/CHANGE_DUR,1));
+    if(changeHold>=CHANGE_DUR){
+      changeHold=0;progRing.style.strokeDashoffset=RING_C;
+      shapeIdx=(shapeIdx+1)%SHAPES.length;
+      morphToShape(SHAPES[shapeIdx]);
+    }
+  } else {
+    changeHold=Math.max(0,changeHold-dt*5);
+    if(changeHold===0){cp.classList.remove('show');progRing.style.strokeDashoffset=RING_C;}
+  }
+}
+
+// ══════════════════════════════════════════════════
+// ANIMATION LOOP
+// ══════════════════════════════════════════════════
+const clock=new THREE.Clock();
+function animate(){
+  requestAnimationFrame(animate);
+  const dt=Math.min(clock.getDelta(),.05);
+  const t=clock.getElapsedTime();
+
+  updateGestures(dt);
+
+  if(smoothedHands.length===0){tRotY=t*.18;tRotX=Math.sin(t*.11)*.11;}
+  rotX+=(tRotX-rotX)*.06; rotY+=(tRotY-rotY)*.06;
+  if(pts){pts.position.copy(objPos);if(!isGrabbing){pts.rotation.x=rotX;pts.rotation.y=rotY;}}
+
+  dispersion += (dispersionTgt - dispersion) * (dispersionTgt > dispersion ? 0.06 : 0.04);
+
+  const pos=geo.attributes.position.array;
+  if(morphing){
+    morphT+=dt;
+    const p=easeOutElastic(Math.min(morphT/MORPH_DUR,1));
+    for(let i=0;i<N*3;i++) pos[i]=mFrom[i]+(mTo[i]-mFrom[i])*p;
+    geo.attributes.position.needsUpdate=true;
+    if(morphT>=MORPH_DUR){for(let i=0;i<N*3;i++) homeArr[i]=mTo[i];morphing=false;}
+  } else {
+    const d=dispersion;
+    for(let i=0;i<N;i++){
+      const ti=i*3;
+      const tx=homeArr[ti]+(randArr[ti]-homeArr[ti])*d;
+      const ty=homeArr[ti+1]+(randArr[ti+1]-homeArr[ti+1])*d;
+      const tz=homeArr[ti+2]+(randArr[ti+2]-homeArr[ti+2])*d;
+      const s = d > 0.5 ? 0.055 : 0.038;
+      pos[ti+1]+=(ty-pos[ti+1])*s;
+      pos[ti+2]+=(tz-pos[ti+2])*s;
+    }
+    geo.attributes.position.needsUpdate=true;
+  }
+
+  const col=geo.attributes.color.array;
+  const fade=0.28+(1-dispersion)*0.72;
+  for(let i=0;i<N;i++){
+    const b=(0.72+0.28*Math.sin(i*.052+t*.9))*fade;
+    col[i*3]=CONFIG.color.r*b;col[i*3+1]=CONFIG.color.g*b;col[i*3+2]=CONFIG.color.b*b;
+  }
+  geo.attributes.color.needsUpdate=true;
+  mat.opacity=0.25+(1-dispersion)*0.65;
+  renderer.render(scene,cam3d);
+}
+
+// ══════════════════════════════════════════════════
+// MEDIAPIPE INITIALIZATION
+// ══════════════════════════════════════════════════
+async function initMediaPipe(){
+  const video=document.getElementById('cam-video');
+  
+ const hands=new Hands({
+  locateFile:(file)=>`./${file}`
+});
+  hands.setOptions({
+    maxNumHands:2,
+    modelComplexity:1,           // 1 = full precision
+    minDetectionConfidence:0.80,
+    minTrackingConfidence:0.75,
+  });
+  hands.onResults((results)=>{
+    drawPreview(results);
+    const raw=[];
+    if(results.multiHandLandmarks&&results.multiHandedness){
+      results.multiHandLandmarks.forEach((lm,i)=>{
+        raw.push({label:results.multiHandedness[i].label,lm});
+      });
+    }
+    smoothUpdate(raw);
+  });
+
+ 
+  const cam=new Camera(video,{
+    onFrame:async()=>{ await hands.send({image:video}); },
+    width:640,height:480,
+  });
+  await cam.start();
+  document.getElementById('cam-badge').classList.add('on');
+  document.getElementById('loading').classList.add('hide');
+}
+
+// ══════════════════════════════════════════════════
+// UI
+// ══════════════════════════════════════════════════
+document.querySelectorAll('.shape-pill').forEach(btn=>{
+  btn.addEventListener('click',()=>{shapeIdx=SHAPES.indexOf(btn.dataset.shape);morphToShape(btn.dataset.shape);});
+});
+document.querySelectorAll('.color-dot').forEach(d=>{
+  d.addEventListener('click',()=>{
+    document.querySelectorAll('.color-dot').forEach(x=>x.classList.remove('active'));
+    d.classList.add('active');CONFIG.color.set(d.dataset.color);
+  });
+});
+
+initParticles();
+animate();
+initMediaPipe();
+</script>
+</body>
+</html>
